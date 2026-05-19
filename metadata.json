@@ -1,0 +1,6 @@
+{
+  "name": "Ensemble AI Host",
+  "description": "A 20-minute visual interaction event host controller with Gemini TTS and timeline management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

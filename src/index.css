@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #F27D26;
+  --color-accent: #3B82F6;
+  --color-bg: #020617;
+}
+
+@layer utilities {
+  .glass-panel {
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 24px;
+  }
+  
+  .btn-script {
+    background: rgba(255, 255, 255, 0.1);
+    transition: all 0.2s;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  
+  .btn-script:hover {
+    background: rgba(242, 125, 38, 0.2);
+    border-color: var(--color-primary);
+  }
+  
+  .glow-orange {
+    box-shadow: 0 0 20px rgba(242, 125, 38, 0.3);
+  }
+  
+  .scroll-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+body {
+  background-color: var(--color-bg);
+  color: white;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+}
+
+html.overlay-mode,
+body.overlay-mode,
+body.overlay-mode #root {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+.overlay-root {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  background: transparent !important;
+  background-color: transparent !important;
+  pointer-events: none;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 3rem;
+}
+
+.overlay-root * {
+  pointer-events: none;
+}
+
+.overlay-root .pointer-events-auto,
+.overlay-root .pointer-events-auto * {
+  pointer-events: auto !important;
+}
+
+.caption-overlay {
+  position: fixed;
+  left: 50%;
+  bottom: 48px;
+  transform: translateX(-50%);
+  width: min(88vw, 1200px);
+  background: rgba(10, 12, 24, 0.42);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 24px;
+  padding: 24px 32px;
+  color: white;
+  box-shadow: 0 0 40px rgba(120, 160, 255, 0.28);
+}
