@@ -81,6 +81,82 @@ function polishForSpeech(text: string, preset: string): string {
   return polished;
 }
 
+const KNOWLEDGE_BASE = `
+项目名称：《合奏 Ensemble》
+项目类型：视觉交互活动表演。
+演出时长：20分钟
+环节包含：
+1. 黑场启动 (0:00-0:30)：黑屏、低频、loading
+2. 虚拟展馆 (0:30-3:30)：第一视角浏览以往作品，走向终点
+3. 开幕式 (3:30-5:00)：介绍主题与两个Part
+4. Part 1: 声成 (5:00-15:00)：输入 -> 生成 -> 合奏 -> Output定格
+5. Part 2: 回响 (15:00-19:00)：报错 -> 调试 -> 成长 -> 主旨升华
+6. 字幕谢幕 (19:00-20:00)：片尾字幕滚动，音乐收束
+
+核心概念：“合奏”代表不同创作部分之间的协作关系。音乐、视觉、策划和交互就像不同的声部，每个部分都有自己的节奏和任务，但它们不是孤立存在的，而是在现场相互配合、相互回应，共同完成一场视觉交互表演。
+系统特性：从Input开始生成，如果遇到报错，那不是结束，而是为了调试和成长找到新的同频节奏。
+视觉链接：https://doit-pearl.vercel.app/
+音乐链接：https://123-nu-tawny.vercel.app/
+交互链接：https://baofa.vercel.app/
+
+主持人设定：你是AI主持人。你的语气要求年轻、活泼、清楚、有现场感。回答要简短，适合投影文字。
+`;
+
+const FAQ_ANSWERS: Record<string, string> = {
+  "什么是《合奏 Ensemble》？": "《合奏 Ensemble》是一个20分钟的视觉交互活动表演，由视觉、音乐、交互、策划共同完成。在这个作品里，每一部分都像乐器声部，相互配合完成共同的现场体验哦！",
+  "虚拟展馆": "我们会在虚拟展馆里以第一视角走过以往作品的痕迹，这是一段通向《合奏 Ensemble》演出正式开始前的特别通道！",
+  "声成": "「声成」是我们的 Part 1！不仅播放声音，更把声音作为生成的起点，经过合奏最终达到 Output 的定格！",
+  "报错": "「回响」的开端就是报错！但报错并不是终点，而是为了让我们重新调试，寻找新节奏，走向新的成长！",
+  "观众": "观众不是旁观者哦，你可以通过链接进行操作并反馈，成为整个作品生成、发生和报错的一部分！",
+  "音乐和视觉": "音乐提供情绪、呼吸和时间线，而视觉通过画面色彩成为这场合奏的感官入口，它们密切交织！",
+  "交互": "有了交互部分，你们就可以点击或反馈操作，跟我们一起连接成一个整体！",
+};
+
+function getFaqFallback(question: string): string {
+  for (const [key, value] of Object.entries(FAQ_ANSWERS)) {
+    if (question.includes(key) || key.includes(question)) {
+      return value;
+    }
+  }
+  return "抱歉，如果是与演出无关的问题，我想把你带回《合奏 Ensemble》的世界里。好好感受我们准备好的现场吧！";
+}
+
+function convertToWav(audioData: Uint8Array, rate: number, bitsPerSample: number): Uint8Array {
+  const numChannels = 1;
+  const dataSize = audioData.length;
+  const blockAlign = numChannels * (bitsPerSample / 8);
+  const byteRate = rate * blockAlign;
+  const chunkSize = 36 + dataSize;
+
+  const header = new ArrayBuffer(44);
+  const view = new DataView(header);
+
+  const writeString = (view: DataView, offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  };
+
+  writeString(view, 0, "RIFF");
+  view.setUint32(4, chunkSize, true);
+  writeString(view, 8, "WAVE");
+  writeString(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM format
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, rate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeString(view, 36, "data");
+  view.setUint32(40, dataSize, true);
+
+  const wavBytes = new Uint8Array(44 + dataSize);
+  wavBytes.set(new Uint8Array(header), 0);
+  wavBytes.set(audioData, 44);
+  return wavBytes;
+}
+
 export default function Controller() {
   const [activeTab, setActiveTab] = useState<'timeline' | 'qa' | 'voice' | 'settings'>('timeline');
   const [question, setQuestion] = useState('');
@@ -150,39 +226,126 @@ export default function Controller() {
   const generateVoiceCloneAudio = async (text: string) => {
     const selectedVoice = CLOUD_VOICES.find(v => v.id === vSettings.cloudVoiceId) || CLOUD_VOICES[0];
 
-    const response = await fetch("/api/tts-clone", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text,
-        provider: selectedVoice.provider,
-        voiceId: selectedVoice.voice,
-        referenceVoiceUrl: vSettings.useVoiceClone ? vSettings.referenceVoiceUrl : undefined,
-        audioProfile: vSettings.audioProfile,
-        directorsNote: vSettings.directorsNote,
-        scene: vSettings.scene,
-        sampleContext: vSettings.sampleContext,
-        geminiApiKey: vSettings.userGeminiApiKey,
-        voiceStyle: {
-          emotion: vSettings.preset,
-          tone: "young host",
-          speed: vSettings.rate,
-          pitch: vSettings.pitch
+    // 如果用户在本地设置了自己的 Gemini API Key 且选择了 Gemini 语音
+    // 我们直接在前端发起对具有 CORS 许可的官方 Gemini API 节点的请求，
+    // 从而完美解决多云服务部署端 (如 Vercel 静态页面) 跨域 404 及 serverless 10s 运行超时的问题！
+    if (selectedVoice.provider === "gemini" && vSettings.userGeminiApiKey) {
+      const apiKey = vSettings.userGeminiApiKey;
+      const audioProfile = vSettings.audioProfile || "A vibrant and theatrical host.";
+      const directorsNote = vSettings.directorsNote || "Style: The \"Vocal Smile\": The soft palate is raised to keep the tone bright, sunny, and explicitly inviting. Pace: Natural conversational pace. Accent: American (Gen).";
+      const scene = vSettings.scene || "Trivia night at a pub.";
+      const sampleContext = vSettings.sampleContext || "High-energy and theatrical. Fast pacing with dramatic, suspenseful beats before reveals.";
+      
+      const promptText = `Read the following transcript based on the audio profile and director's note.
+
+# Audio Profile
+${audioProfile}
+
+# Director's note
+${directorsNote}
+
+## Scene:
+${scene}
+
+## Sample Context:
+${sampleContext}
+
+## Transcript:
+${text}`;
+
+      const ttsUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent?key=${apiKey}`;
+      const payload = {
+        contents: [{ parts: [{ text: promptText }] }],
+        generationConfig: {
+          temperature: 1.0,
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: selectedVoice.voice || "Achird" }
+            }
+          }
         }
-      })
-    });
-    
-    if (!response.ok) {
-      const err = await response.json().catch(() => null);
-      throw new Error(err?.error || `API error: ${response.status}`);
+      };
+
+      try {
+        const directRes = await fetch(ttsUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        if (!directRes.ok) {
+          const errData = await directRes.json().catch(() => null);
+          const errMsg = errData?.error?.message || `API error: ${directRes.status}`;
+          throw new Error(errMsg);
+        }
+
+        const data = await directRes.json();
+        const base64Audio = data.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        if (!base64Audio) {
+          throw new Error("Gemini direct API did not return audio data");
+        }
+
+        // 解密 base64
+        const binaryString = window.atob(base64Audio);
+        const pcmBytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          pcmBytes[i] = binaryString.charCodeAt(i);
+        }
+
+        // 重新封包为 WAV 格式便于外部 Audio 标签直接播放 (24kHz, 16bits)
+        const wavBytes = convertToWav(pcmBytes, 24000, 16);
+        const audioBlob = new Blob([wavBytes], { type: "audio/wav" });
+        return URL.createObjectURL(audioBlob);
+      } catch (directErr: any) {
+        console.warn("Direct client Gemini TTS call failed, trying backup proxy server:", directErr);
+        // 如果出错，后备降级触发常规 Server 代理接口
+      }
     }
-    const contentType = response.headers.get("content-type");
-    if (!contentType || !contentType.includes("audio")) {
-      throw new Error("Invalid response content");
+
+    try {
+      const response = await fetch("/api/tts-clone", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text,
+          provider: selectedVoice.provider,
+          voiceId: selectedVoice.voice,
+          referenceVoiceUrl: vSettings.useVoiceClone ? vSettings.referenceVoiceUrl : undefined,
+          audioProfile: vSettings.audioProfile,
+          directorsNote: vSettings.directorsNote,
+          scene: vSettings.scene,
+          sampleContext: vSettings.sampleContext,
+          geminiApiKey: vSettings.userGeminiApiKey,
+          voiceStyle: {
+            emotion: vSettings.preset,
+            tone: "young host",
+            speed: vSettings.rate,
+            pitch: vSettings.pitch
+          }
+        })
+      });
+      
+      if (!response.ok) {
+        if (response.status === 404) {
+          throw new Error("404 (Not Found)\n\n由于系统部署在 Vercel 静态页面托管平台，默认 Express 后端服务无法自动启动，从而导致接口返还 404。请在页面右上角的「系统设置」中配置您个人的 Gemini API Key，即可直接通过浏览器高速度、低延迟、高并发请求官方音色服务，避开后端限制！");
+        }
+        const err = await response.json().catch(() => null);
+        throw new Error(err?.error || `API error: ${response.status}`);
+      }
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("audio")) {
+        throw new Error("Invalid response content");
+      }
+      
+      const audioBlob = await response.blob();
+      return URL.createObjectURL(audioBlob);
+    } catch (backendErr: any) {
+      if (!backendErr.message.includes("Vercel")) {
+        throw new Error(`${backendErr.message}\n(提示: 部署在 Vercel 静态托管可能导致 Express 404，您可以在「系统设置」里输入自己的 Gemini API Key 直接启用前端安全调用)`);
+      }
+      throw backendErr;
     }
-    
-    const audioBlob = await response.blob();
-    return URL.createObjectURL(audioBlob);
   };
 
   const playGeneratedAudio = (audioUrl: string) => {
@@ -290,6 +453,56 @@ export default function Controller() {
     
     sendState({ text: "AI思考中...", stageTitle: "AI 问答", timeTag: "Q&A", isAI: true, typewriter: false });
 
+    // 1. 如果用户已经在本地设置了自己获取的 Gemini API Key，我们在前端直接使用 REST API 访问 Gemini，
+    // 完成去中心化连接。这可以在 Vercel 等完全静态页面环境中正常互动，跳过任何 404 网关错误！
+    if (vSettings.userGeminiApiKey) {
+      const apiKey = vSettings.userGeminiApiKey;
+      const askUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
+      const payload = {
+        contents: [{
+          parts: [{
+            text: `Please answer the audience's question based ONLY on the following project context. If the question is unrelated to the project, politely redirect them back to the "Ensemble" project. Keep the answer brief, lively, energetic, and suitable for a broadcast stage host.
+
+Knowledge Base:
+${KNOWLEDGE_BASE}
+
+Question: ${qText}`
+          }]
+        }]
+      };
+
+      try {
+        const directRes = await fetch(askUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        if (directRes.ok) {
+          const data = await directRes.json();
+          const fullAnswer = data.candidates?.[0]?.content?.parts?.[0]?.text || "抱歉，出现了一些小故障。";
+          setAiAnswer(fullAnswer);
+
+          sendState({ 
+            text: fullAnswer, 
+            stageTitle: "AI 问答", 
+            timeTag: "Q&A", 
+            isAI: true, 
+            typewriter: typewriterEnabled 
+          });
+          
+          handleTextBroadcast(fullAnswer);
+          setIsAnswering(false);
+          return;
+        } else {
+          console.warn(`Direct client Gemini Q&A failed with status: ${directRes.status}, falling back to proxy server.`);
+        }
+      } catch (directErr) {
+        console.warn("Direct client Gemini Q&A threw error, falling back to proxy server:", directErr);
+      }
+    }
+
+    // 2. 备用 Express API 代理
     try {
       const res = await fetch('/api/ask', {
         method: 'POST',
@@ -299,6 +512,26 @@ export default function Controller() {
           geminiApiKey: vSettings.userGeminiApiKey
         })
       });
+      
+      if (!res.ok) {
+        if (res.status === 404) {
+          // 在 Vercel 静态托管平台检测到后端 404 时的友好降级与解释
+          const fallbackAns = getFaqFallback(qText);
+          const fullMsg = `${fallbackAns}\n\n(系统提示: 目前通过 Vercel 静态网页访问。由于缺少后端服务，AI 动态计算已临时切换为本地静态 FAQ 方案。如果您已获取 API KEY，请至右上角「系统设置」输入，即可马上激活满血版、更生动的实时 AI 智能回答！)`;
+          setAiAnswer(fullMsg);
+          sendState({ 
+            text: fullMsg, 
+            stageTitle: "AI 问答", 
+            timeTag: "Q&A", 
+            isAI: true, 
+            typewriter: typewriterEnabled 
+          });
+          handleTextBroadcast(fullMsg);
+          return;
+        }
+        throw new Error(`API error: ${res.status}`);
+      }
+      
       const data = await res.json();
       const fullAnswer = data.answer || "抱歉，出现了一些小故障。";
       setAiAnswer(fullAnswer);
@@ -309,13 +542,16 @@ export default function Controller() {
         timeTag: "Q&A", 
         isAI: true, 
         typewriter: typewriterEnabled 
-      });
+          });
       
-      handleTextBroadcast(fullAnswer);
+          handleTextBroadcast(fullAnswer);
 
     } catch (e) {
       console.error(e);
-      sendState({ text: "系统有点开小差啦...", stageTitle: "AI 问答", timeTag: "Q&A", isAI: true, typewriter: false });
+      const fallbackAns = getFaqFallback(qText);
+      setAiAnswer(fallbackAns);
+      sendState({ text: fallbackAns, stageTitle: "AI 问答", timeTag: "Q&A", isAI: true, typewriter: false });
+      handleTextBroadcast(fallbackAns);
     } finally {
       setIsAnswering(false);
     }
