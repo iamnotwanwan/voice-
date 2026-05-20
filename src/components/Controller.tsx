@@ -176,6 +176,10 @@ export default function Controller() {
   const [currentSentenceInfo, setCurrentSentenceInfo] = useState('');
   const [audioStatusMsg, setAudioStatusMsg] = useState("");
 
+  // API testing states
+  const [testStatus, setTestStatus] = useState<string>("");
+  const [isTestingApi, setIsTestingApi] = useState<boolean>(false);
+
   const timerRef = useRef<number | null>(null);
   const activeUtterance = useRef<SpeechSynthesisUtterance | null>(null);
   const stopRequested = useRef<boolean>(false);
@@ -223,128 +227,118 @@ export default function Controller() {
     handleTextBroadcast("你好，我是《合奏 Ensemble》的 AI 主持人。现在声音测试成功，我们的合奏即将开始。");
   };
 
-  const generateVoiceCloneAudio = async (text: string) => {
-    const selectedVoice = CLOUD_VOICES.find(v => v.id === vSettings.cloudVoiceId) || CLOUD_VOICES[0];
+  const generateGeminiAudio = async (text: string) => {
+    const payload: any = { text };
+    if (vSettings.userGeminiApiKey) {
+      payload.geminiApiKey = vSettings.userGeminiApiKey;
+    }
 
-    // 如果用户在本地设置了自己的 Gemini API Key 且选择了 Gemini 语音
-    // 我们直接在前端发起对具有 CORS 许可的官方 Gemini API 节点的请求，
-    // 从而完美解决多云服务部署端 (如 Vercel 静态页面) 跨域 404 及 serverless 10s 运行超时的问题！
-    if (selectedVoice.provider === "gemini" && vSettings.userGeminiApiKey) {
-      const apiKey = vSettings.userGeminiApiKey;
-      const audioProfile = vSettings.audioProfile || "A vibrant and theatrical host.";
-      const directorsNote = vSettings.directorsNote || "Style: The \"Vocal Smile\": The soft palate is raised to keep the tone bright, sunny, and explicitly inviting. Pace: Natural conversational pace. Accent: American (Gen).";
-      const scene = vSettings.scene || "Trivia night at a pub.";
-      const sampleContext = vSettings.sampleContext || "High-energy and theatrical. Fast pacing with dramatic, suspenseful beats before reveals.";
-      
-      const promptText = `Read the following transcript based on the audio profile and director's note.
+    const response = await fetch("/api/gemini-tts", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
 
-# Audio Profile
-${audioProfile}
-
-# Director's note
-${directorsNote}
-
-## Scene:
-${scene}
-
-## Sample Context:
-${sampleContext}
-
-## Transcript:
-${text}`;
-
-      const ttsUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent?key=${apiKey}`;
-      const payload = {
-        contents: [{ parts: [{ text: promptText }] }],
-        generationConfig: {
-          temperature: 1.0,
-          responseModalities: ["AUDIO"],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: selectedVoice.voice || "Achird" }
-            }
-          }
-        }
-      };
-
+    if (!response.ok) {
+      const status = response.status;
+      let errorText = await response.text().catch(() => "");
       try {
-        const directRes = await fetch(ttsUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        });
-
-        if (!directRes.ok) {
-          const errData = await directRes.json().catch(() => null);
-          const errMsg = errData?.error?.message || `API error: ${directRes.status}`;
-          throw new Error(errMsg);
+        const errJson = JSON.parse(errorText);
+        if (errJson.error) {
+          errorText = typeof errJson.error === "string" ? errJson.error : JSON.stringify(errJson.error);
         }
+      } catch (e) {}
 
-        const data = await directRes.json();
-        const base64Audio = data.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-        if (!base64Audio) {
-          throw new Error("Gemini direct API did not return audio data");
-        }
+      console.error("Gemini TTS API error:", status, errorText);
 
-        // 解密 base64
-        const binaryString = window.atob(base64Audio);
-        const pcmBytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          pcmBytes[i] = binaryString.charCodeAt(i);
-        }
-
-        // 重新封包为 WAV 格式便于外部 Audio 标签直接播放 (24kHz, 16bits)
-        const wavBytes = convertToWav(pcmBytes, 24000, 16);
-        const audioBlob = new Blob([wavBytes], { type: "audio/wav" });
-        return URL.createObjectURL(audioBlob);
-      } catch (directErr: any) {
-        console.warn("Direct client Gemini TTS call failed, trying backup proxy server:", directErr);
-        // 如果出错，后备降级触发常规 Server 代理接口
+      if (status === 404) {
+        throw new Error("线上 /api/gemini-tts 接口不存在。请检查 api/gemini-tts.ts 是否部署成功。");
+      } else if (status === 500) {
+        throw new Error(`Gemini TTS 后端执行失败，请检查 GEMINI_API_KEY、模型名称和服务器日志。(详情: ${errorText})`);
+      } else if (status === 401 || status === 403) {
+        throw new Error("Gemini API Key 无效或没有权限。");
+      } else {
+        throw new Error(`API error: ${status} ${errorText}`);
       }
     }
 
+    const audioBlob = await response.blob();
+
+    if (!audioBlob || audioBlob.size === 0) {
+      throw new Error("Gemini TTS 返回的音频为空");
+    }
+
+    return URL.createObjectURL(audioBlob);
+  };
+
+  const testApiGeminiTts = async () => {
+    if (isTestingApi) return;
+    setIsTestingApi(true);
+    setTestStatus("正在测试 /api/gemini-tts 接口...");
+    stopAllAudio();
+
+    const requestText = "你好，我是《合奏 Ensemble》的 AI 主持人。现在 Gemini TTS 正在测试。";
+
     try {
-      const response = await fetch("/api/tts-clone", {
+      const payload: any = { text: requestText };
+      if (vSettings.userGeminiApiKey) {
+        payload.geminiApiKey = vSettings.userGeminiApiKey;
+      }
+
+      const response = await fetch("/api/gemini-tts", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text,
-          provider: selectedVoice.provider,
-          voiceId: selectedVoice.voice,
-          referenceVoiceUrl: vSettings.useVoiceClone ? vSettings.referenceVoiceUrl : undefined,
-          audioProfile: vSettings.audioProfile,
-          directorsNote: vSettings.directorsNote,
-          scene: vSettings.scene,
-          sampleContext: vSettings.sampleContext,
-          geminiApiKey: vSettings.userGeminiApiKey,
-          voiceStyle: {
-            emotion: vSettings.preset,
-            tone: "young host",
-            speed: vSettings.rate,
-            pitch: vSettings.pitch
-          }
-        })
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
       });
-      
+
       if (!response.ok) {
-        if (response.status === 404) {
-          throw new Error("404 (Not Found)\n\n由于系统部署在 Vercel 静态页面托管平台，默认 Express 后端服务无法自动启动，从而导致接口返还 404。请在页面右上角的「系统设置」中配置您个人的 Gemini API Key，即可直接通过浏览器高速度、低延迟、高并发请求官方音色服务，避开后端限制！");
-        }
-        const err = await response.json().catch(() => null);
-        throw new Error(err?.error || `API error: ${response.status}`);
+        const status = response.status;
+        let errMsg = await response.text().catch(() => "");
+        try {
+          const errJson = JSON.parse(errMsg);
+          if (errJson.error) {
+            errMsg = typeof errJson.error === 'string' ? errJson.error : JSON.stringify(errJson.error);
+          }
+        } catch (e) {}
+
+        throw {
+          status,
+          url: "/api/gemini-tts",
+          message: errMsg
+        };
       }
-      const contentType = response.headers.get("content-type");
-      if (!contentType || !contentType.includes("audio")) {
-        throw new Error("Invalid response content");
-      }
-      
+
       const audioBlob = await response.blob();
-      return URL.createObjectURL(audioBlob);
-    } catch (backendErr: any) {
-      if (!backendErr.message.includes("Vercel")) {
-        throw new Error(`${backendErr.message}\n(提示: 部署在 Vercel 静态托管可能导致 Express 404，您可以在「系统设置」里输入自己的 Gemini API Key 直接启用前端安全调用)`);
+      if (!audioBlob || audioBlob.size === 0) {
+        throw new Error("Gemini TTS 返回的音频为空");
       }
-      throw backendErr;
+
+      const url = URL.createObjectURL(audioBlob);
+      setTestStatus("Gemini TTS 线上接口正常！已成功播放返回音频。");
+      await playGeneratedAudio(url);
+    } catch (err: any) {
+      console.error("Test gemini-tts API failed:", err);
+      if (err.status !== undefined) {
+        let errorReason = "";
+        if (err.status === 404) {
+          errorReason = "线上 /api/gemini-tts 接口不存在。请检查 api/gemini-tts.ts 是否部署成功。";
+        } else if (err.status === 500) {
+          errorReason = "Gemini TTS 后端执行失败，请检查 GEMINI_API_KEY、模型名称和服务器日志。";
+        } else if (err.status === 401 || err.status === 403) {
+          errorReason = "Gemini API Key 无效或没有权限。";
+        } else {
+          errorReason = `接口返回错误：${err.message}`;
+        }
+        setTestStatus(`接口测试失败。\n状态码: ${err.status}\n接口地址: ${err.url}\n错误原因: ${errorReason}\n详情: ${err.message}`);
+      } else {
+        setTestStatus(`测试异常: ${err.message || err}`);
+      }
+    } finally {
+      setIsTestingApi(false);
     }
   };
 
@@ -408,7 +402,7 @@ ${text}`;
     setAudioStatusMsg("正在调用云端高性能 TTS...");
     try {
       const finalTexts = polishForSpeech(text, vSettings.preset);
-      const url = await generateVoiceCloneAudio(finalTexts);
+      const url = await generateGeminiAudio(finalTexts);
       if (stopRequested.current) return;
       setAudioStatusMsg("正在播放语音...");
       await playGeneratedAudio(url);
@@ -995,7 +989,23 @@ Question: ${qText}`
                   >
                     停止播报声音
                   </button>
+
+                  <button 
+                    onClick={testApiGeminiTts}
+                    disabled={isTestingApi}
+                    className="w-full px-6 py-3 bg-amber-500/20 text-amber-400 font-bold border border-amber-500/40 rounded-xl hover:bg-amber-500/30 disabled:opacity-50 transition-colors flex justify-center items-center gap-2"
+                  >
+                    <svg className="w-5 h-5 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                    {isTestingApi ? "正在测试..." : "测试 /api/gemini-tts 接口"}
+                  </button>
                 </div>
+
+                {testStatus && (
+                  <div className="text-xs text-white/90 border border-amber-500/30 rounded-xl p-4 bg-white/5 break-all whitespace-pre-wrap leading-relaxed shadow-[0_0_15px_rgba(245,158,11,0.05)]">
+                    <span className="font-bold block text-amber-400 mb-1">接口测试状态 Report</span>
+                    {testStatus}
+                  </div>
+                )}
 
                 {audioStatusMsg && (
                   <div className="text-xs text-primary font-bold animate-pulse px-4 py-2 border border-primary/20 rounded-lg bg-primary/10 break-all">

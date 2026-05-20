@@ -133,6 +133,89 @@ Question: ${question}`,
     }
   });
 
+  app.post("/api/gemini-tts", async (req, res) => {
+    try {
+      const { text, geminiApiKey } = req.body;
+
+      if (!text) {
+        return res.status(400).json({ error: "Missing text" });
+      }
+
+      const apiKey = geminiApiKey || process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.status(400).json({ error: "缺少 GEMINI_API_KEY，且未在系统设置中配置用户个人的 API Key。" });
+      }
+
+      const client = getAIClient(apiKey);
+      if (!client) {
+        return res.status(500).json({ error: "无法初始化 GoogleGenAI 客户端" });
+      }
+
+      const model = process.env.GEMINI_TTS_MODEL || "gemini-3.1-flash-tts-preview";
+
+      const prompt = `
+Read the following transcript based on the audio profile and director's note.
+
+# Audio Profile
+A vibrant and theatrical host.
+
+# Director's note
+Style: The "Vocal Smile": The tone is bright, sunny, and explicitly inviting.
+Pace: Natural conversational pace.
+Accent: American (Gen).
+
+## Scene:
+A live digital performance host for the project 《合奏 Ensemble》.
+
+## Sample Context:
+High-energy and theatrical. Fast pacing with dramatic, suspenseful beats before reveals.
+
+## Transcript:
+${text}
+`;
+
+      const response = await client.models.generateContent({
+        model,
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        config: {
+          temperature: 1,
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: "Achird"
+              }
+            }
+          }
+        }
+      });
+
+      const part = response.candidates?.[0]?.content?.parts?.find(
+        (p: any) => p.inlineData?.data
+      );
+
+      if (!part?.inlineData?.data) {
+        return res.status(500).json({
+          error: "Gemini TTS did not return audio data"
+        });
+      }
+
+      const base64Audio = part.inlineData.data;
+      const audioBuffer = Buffer.from(base64Audio, "base64");
+      const wavBuffer = convertToWav(audioBuffer, 24000, 16);
+
+      res.setHeader("Content-Type", "audio/wav");
+      res.setHeader("Cache-Control", "no-store");
+      return res.send(wavBuffer);
+    } catch (error) {
+      console.error("Gemini TTS route error:", error);
+      return res.status(500).json({
+        error: "Gemini TTS failed",
+        details: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
   app.post("/api/tts-clone", async (req, res) => {
     try {
       const { text, provider, voiceId, referenceVoiceUrl, voiceStyle, geminiApiKey } = req.body;
